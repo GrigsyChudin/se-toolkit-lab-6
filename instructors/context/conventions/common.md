@@ -275,6 +275,15 @@ When multiple actions serve a single logical goal, group them under one step. Wr
    3. Fill in the values.
 ```
 
+When sub-items describe the behavior of an artifact being created (a workflow, config file, script, etc.) rather than actions the student performs, use "does the following:" instead. Write sub-items in third person to reflect what the artifact does:
+
+```markdown
+1. Add a workflow that does the following on every push to `main`:
+   1. Checks out the repository.
+   2. Runs all back-end unit tests.
+   3. Runs all end-to-end tests.
+```
+
 When actions don't share a logical goal, flatten them into separate top-level steps (see [4.1. Instructions wording](#41-instructions-wording)).
 
 ## 4.20. Placeholders in docs
