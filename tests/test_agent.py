@@ -55,3 +55,29 @@ def test_agent_list_wiki():
     # Check answer contains some known wiki files
     assert "git.md" in data["answer"].lower()
     assert "docker.md" in data["answer"].lower()
+
+def test_agent_framework_info():
+    """
+    Test that the agent can identify the backend framework using tools.
+    """
+    data = run_agent("What Python web framework does this project's backend use?")
+    
+    # Check tool calls
+    tool_names = [tc["tool"] for tc in data["tool_calls"]]
+    assert "read_file" in tool_names
+    
+    # The agent should find FastAPI
+    assert "fastapi" in data["answer"].lower()
+
+def test_agent_item_count():
+    """
+    Test that the agent can query the item count using query_api.
+    """
+    data = run_agent("How many items are in the database?")
+    
+    # Check tool calls
+    tool_names = [tc["tool"] for tc in data["tool_calls"]]
+    assert "query_api" in tool_names
+    
+    # The answer should mention the item count (likely 0 in fresh DB)
+    assert "0" in data["answer"] or "no items" in data["answer"].lower() or "empty" in data["answer"].lower()

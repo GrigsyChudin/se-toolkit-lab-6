@@ -1,6 +1,7 @@
 import sys
 import json
 import os
+import httpx
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -15,11 +16,14 @@ class LLMSettings(BaseSettings):
     llm_api_key: str = Field(alias="LLM_API_KEY")
     llm_api_base: str = Field(alias="LLM_API_BASE")
     llm_model: str = Field(alias="LLM_MODEL")
+    lms_api_key: str = Field(alias="LMS_API_KEY")
+    agent_api_base_url: str = Field(default="http://localhost:42002", alias="AGENT_API_BASE_URL")
 
     model_config = SettingsConfigDict(
-        env_file=".env.agent.secret",
+        env_file=(".env.agent.secret", ".env.docker.secret"),
         env_file_encoding="utf-8",
-        extra="ignore"
+        extra="ignore",
+        populate_by_name=True
     )
 
 class AgentResponse(BaseModel):
@@ -62,6 +66,34 @@ def read_file(path: str) -> str:
     except Exception as e:
         return f"Error: {e}"
 
+def query_api(method: str, path: str, body: Optional[str] = None, settings: Optional[LLMSettings] = None, use_auth: bool = True) -> str:
+    """Call the deployed backend API."""
+    if settings is None:
+        return "Error: Settings not provided to query_api."
+    
+    url = f"{settings.agent_api_base_url.rstrip('/')}/{path.lstrip('/')}"
+    headers = {
+        "Content-Type": "application/json"
+    }
+    if use_auth:
+        headers["Authorization"] = f"Bearer {settings.lms_api_key}"
+    
+    try:
+        with httpx.Client() as client:
+            resp = client.request(
+                method=method,
+                url=url,
+                headers=headers,
+                content=body,
+                timeout=30.0
+            )
+            return json.dumps({
+                "status_code": resp.status_code,
+                "body": resp.text
+            })
+    except Exception as e:
+        return f"Error querying API: {e}"
+
 TOOLS = [
     {
         "type": "function",
@@ -91,14 +123,39 @@ TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "query_api",
+            "description": "Call the deployed backend API for system facts or data.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "method": {"type": "string", "description": "HTTP method (GET, POST, PUT, DELETE)."},
+                    "path": {"type": "string", "description": "API endpoint path (e.g., '/items/')."},
+                    "body": {"type": "string", "description": "Optional JSON request body."},
+                    "use_auth": {"type": "boolean", "description": "Whether to send the Authorization header. Defaults to true. Set to false to test unauthenticated access."}
+                },
+                "required": ["method", "path"],
+            },
+        },
+    },
 ]
 
-def execute_tool(name: str, args: Dict[str, Any]) -> str:
+def execute_tool(name: str, args: Dict[str, Any], settings: LLMSettings) -> str:
     """Execute a tool by name and return its result."""
     if name == "list_files":
         return list_files(args.get("path", "."))
     elif name == "read_file":
         return read_file(args.get("path", ""))
+    elif name == "query_api":
+        return query_api(
+            method=args.get("method", "GET"),
+            path=args.get("path", "/"),
+            body=args.get("body"),
+            settings=settings,
+            use_auth=args.get("use_auth", True)
+        )
     else:
         return f"Error: unknown tool {name}"
 
@@ -106,18 +163,31 @@ def execute_tool(name: str, args: Dict[str, Any]) -> str:
 # Agent logic
 # -----------------------------------------------------------------------------
 
-SYSTEM_PROMPT = """You are a documentation assistant. Your goal is to answer questions based ONLY on the project wiki files.
+SYSTEM_PROMPT = """You are a system and documentation assistant. Your goal is to answer questions using the project wiki files, source code, and the deployed backend API.
+
+Structure:
+- `wiki/`: Project documentation.
+- `backend/app/`: Backend source code.
+- `backend/app/routers/`: API router modules.
+- `backend/app/etl.py`: ETL pipeline code.
+- `caddy/Caddyfile`: Reverse proxy configuration.
+- `Dockerfile`: Container configuration.
+
+Tools:
+1. `list_files` & `read_file`: Use these to explore the documentation, source code, and configuration files.
+2. `query_api`: Use this to get live data from the system or check system status.
 
 Rules:
-1. ALWAYS use `list_files` to discover relevant files in the `wiki/` directory first.
-2. ALWAYS use `read_file` to read the contents of relevant files before answering.
-3. If the answer is not in the first file you read, CONTINUE searching other relevant files using `read_file`.
+1. For documentation questions, use `list_files` and `read_file` on the `wiki/` directory.
+2. For system architecture, framework, or code questions, use `list_files` and `read_file` on the `backend/` directory.
+3. If an API call fails or behaves unexpectedly, ALWAYS read the corresponding router in `backend/app/routers/` to diagnose the bug.
+4. For live data (counts, scores, analytics), use `query_api`.
 4. While you are still searching or plan to call more tools, DO NOT provide a final JSON response. Just call the tools.
-5. Once you have found the definitive answer and the source, provide your final response as a JSON object with two fields: "answer" and "source".
-   - "answer": A direct, concise and accurate answer based on the information found using tools. If asked to list something, list it.
-   - "source": The wiki section reference in the format `file_path#section-anchor` (e.g., `wiki/git.md#merge-conflict`).
+5. Once you have found the definitive answer, provide your final response as a JSON object with two fields: "answer" and "source".
+   - "answer": A direct, concise and accurate answer based on the information found.
+   - "source": (Optional) The wiki section reference in the format `file_path#section-anchor`.
 6. Do not include any text outside this JSON object in your final answer.
-7. If you cannot find the answer after searching all relevant files, state that the information is not available in the wiki in the "answer" field and set "source" to null.
+7. If you cannot find the answer, state so in the "answer" field.
 """
 
 def main():
@@ -160,17 +230,21 @@ def main():
 
             assistant_msg = response.choices[0].message
             
-            # If there are tool calls, execute them
+            # Handle tool calls
             if assistant_msg.tool_calls:
-                # Add assistant message to history
                 messages.append(assistant_msg)
                 
                 for tc in assistant_msg.tool_calls:
                     tool_name = tc.function.name
-                    tool_args = json.loads(tc.function.arguments)
-                    
-                    print(f"Executing tool: {tool_name}({tool_args})", file=sys.stderr)
-                    result = execute_tool(tool_name, tool_args)
+                    try:
+                        tool_args = json.loads(tc.function.arguments)
+                    except json.JSONDecodeError:
+                        print(f"Error: failed to parse tool arguments for {tool_name}: {tc.function.arguments}", file=sys.stderr)
+                        tool_args = {}
+                        result = f"Error: Invalid JSON in tool arguments for {tool_name}. Please provide valid JSON."
+                    else:
+                        print(f"Executing tool: {tool_name}({tool_args})", file=sys.stderr)
+                        result = execute_tool(tool_name, tool_args, settings)
                     
                     # Record the call
                     all_tool_calls.append({
@@ -179,44 +253,40 @@ def main():
                         "result": result
                     })
                     
-                    # Add tool result to history
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tc.id,
                         "content": result
                     })
-                # Continue the loop to get another response from LLM
                 continue
             
-            # No tool calls, check if it is a final answer
-            content = assistant_msg.content
-            if not content:
-                content = "{}"
+            # Final answer
+            content = assistant_msg.content or "{}"
+            print(f"DEBUG: Raw LLM content: {content}", file=sys.stderr)
 
-            # Try to parse the final answer JSON
             try:
-                clean_content = content.strip()
-                if clean_content.startswith("```json"):
-                    clean_content = clean_content[7:]
-                if clean_content.endswith("```"):
-                    clean_content = clean_content[:-3]
-                clean_content = clean_content.strip()
-                
+                import re
+                # Try to find JSON block
+                json_match = re.search(r"\{.*\}", content, re.DOTALL)
+                if json_match:
+                    clean_content = json_match.group(0)
+                else:
+                    clean_content = content.strip()
+
                 final_data = json.loads(clean_content)
-                source = final_data.get("source")
                 answer = final_data.get("answer", content)
-                
-                # Ensure answer is a string
+                source = final_data.get("source")
                 if not isinstance(answer, str):
                     answer = str(answer)
 
-                # If source is missing but LLM seems to want to continue (or just failed to provide source),
-                # and we still have steps, let's continue.
-                if source is None and _ < 9:
+                # If it's a documentation/source question (based on tools used), check if source is present
+                # but if tools weren't used for wiki/code, maybe source is not needed
+                needs_source = any(tc["tool"] in ["read_file", "list_files"] for tc in all_tool_calls)
+                
+                if needs_source and source is None and _ < 9:
                     print(f"Assistant provided answer without source, continuing: {answer[:50]}...", file=sys.stderr)
                     messages.append(assistant_msg)
-                    # Add a nudge
-                    messages.append({"role": "user", "content": "You provided an answer without a source. Please use tools to find the exact source in the wiki or state that it cannot be found."})
+                    messages.append({"role": "user", "content": "Your response was missing the 'source' field. Please provide the exact file path and section anchor in JSON format."})
                     continue
 
                 agent_response = AgentResponse(
@@ -229,6 +299,9 @@ def main():
                 if _ < 9:
                     print(f"Assistant provided non-JSON content, continuing: {content[:50]}...", file=sys.stderr)
                     messages.append(assistant_msg)
+                    # Also, if it looks like an answer but not JSON, nudge it
+                    if len(content) > 50:
+                         messages.append({"role": "user", "content": "Your response was not in the required JSON format. Please wrap your final answer in JSON: {\"answer\": \"...\", \"source\": \"...\"}"})
                     continue
                 
                 agent_response = AgentResponse(
@@ -236,13 +309,10 @@ def main():
                     tool_calls=all_tool_calls
                 )
 
-            # Output JSON to stdout
             print(agent_response.model_dump_json())
             sys.exit(0)
 
-        # If we hit the loop limit
         print("Error: Hit maximum tool call limit (10).", file=sys.stderr)
-        # Try to return what we have
         agent_response = AgentResponse(
             answer="Error: Hit maximum tool call limit.",
             tool_calls=all_tool_calls
