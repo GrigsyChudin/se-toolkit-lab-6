@@ -187,8 +187,7 @@ Rules:
    a. First query the endpoint that fails (e.g., GET /analytics/completion-rate?lab=lab-99) and read the error response.
    b. Then read `backend/app/routers/analytics.py` in full.
    c. Identify risky operations:
-      - Missing early-return guard: some endpoints check `if not item_ids: return ...` but `get_completion_rate` does NOT — it runs a SQL query with an empty `IN ()` list which raises an error in PostgreSQL.
-      - Division: `rate = (passed_learners / total_learners) * 100` — guarded by the `if total_learners == 0` check above it.
+      - Missing early-return guard: other endpoints check `if not item_ids: return ...` but `get_completion_rate` does NOT — `total_learners` becomes 0 when the lab has no data, causing ZeroDivisionError on line 212: `rate = (passed_learners / total_learners) * 100`.
       - None-unsafe sort: `sorted(rows, key=lambda r: r.avg_score, reverse=True)` in `get_top_learners` — if `avg_score` is None, Python raises TypeError.
 5. To compare error handling between ETL and API:
    - Read `backend/app/etl.py`: the ETL pipeline uses `response.raise_for_status()` which raises an exception on HTTP errors; it does NOT catch them, so failures propagate as unhandled exceptions.
