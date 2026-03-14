@@ -181,13 +181,15 @@ Rules:
 1. For documentation questions, use `list_files` and `read_file` on the `wiki/` directory.
 2. For system architecture, framework, or code questions, use `list_files` and `read_file` on the `backend/` directory.
 3. If an API call fails or behaves unexpectedly, ALWAYS read the corresponding router in `backend/app/routers/` to diagnose the bug.
+   - When looking for bugs, pay close attention to risky operations: division (potential ZeroDivisionError), sorting with `None` values, or list indexing without length checks.
 4. For live data (counts, scores, analytics), use `query_api`.
-4. While you are still searching or plan to call more tools, DO NOT provide a final JSON response. Just call the tools.
-5. Once you have found the definitive answer, provide your final response as a JSON object with two fields: "answer" and "source".
+   - If asked for a total count of items (e.g., learners, scores), query the relevant endpoint and count the entries in the returned JSON list.
+5. While you are still searching or plan to call more tools, DO NOT provide a final JSON response. Just call the tools.
+6. Once you have found the definitive answer, provide your final response as a JSON object with two fields: "answer" and "source".
    - "answer": A direct, concise and accurate answer based on the information found.
    - "source": (Optional) The wiki section reference in the format `file_path#section-anchor`.
-6. Do not include any text outside this JSON object in your final answer.
-7. If you cannot find the answer, state so in the "answer" field.
+7. Do not include any text outside this JSON object in your final answer.
+8. If you cannot find the answer, state so in the "answer" field.
 """
 
 def main():
