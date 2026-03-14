@@ -44,6 +44,8 @@ The local evaluation benchmark (`run_eval.py`) was instrumental in refining the 
 - **Missing Source:** The agent sometimes provided answers without the `source` field. A retry mechanism and improved system prompt were added to enforce structured output.
 - **Tool Chaining:** For complex questions like "find the bug in /analytics/", the agent learned to first call the API to see the error, and then read the source code.
 - **Auth Handling:** Ensuring the `query_api` correctly defaults to using the `LMS_API_KEY` was critical for passing system-level checks.
+- **Risky Operations:** The agent's prompt was specifically improved to scan for `ZeroDivisionError`, `None`-unsafe sorting, and list index errors when investigating bugs.
+- **Data Counting:** The agent was trained to query endpoints (like `/learners/`) and manually count results in the JSON list to provide accurate statistics.
 
 ## Usage
 Run the agent using `uv`:
