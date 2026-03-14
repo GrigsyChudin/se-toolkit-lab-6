@@ -180,7 +180,7 @@ Tools:
 2. `query_api`: Use this to get live data from the system or check system status.
 
 Rules:
-1. For documentation questions (wiki, Docker cleanup, setup steps), use `list_files("wiki")` first to discover all wiki files, then read the relevant ones. Docker-related cleanup info is in the wiki.
+1. For documentation questions (wiki, Docker cleanup, setup steps), use `list_files("wiki")` first to discover all wiki files, then ALWAYS read the relevant file with `read_file` before answering. Finding a file is NOT sufficient — you must read its contents.
 2. For framework/technology questions: ALWAYS read `backend/app/main.py` — the import statements at the top reveal the web framework (e.g., `from fastapi import ...` means FastAPI).
 3. For Dockerfile questions: read `read_file("Dockerfile")`. Multiple `FROM` statements indicate a multi-stage build (used to keep the final image small by discarding build-time dependencies).
 4. If an API call fails or behaves unexpectedly, or if asked about potential bugs in analytics.py, ALWAYS:
