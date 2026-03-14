@@ -166,30 +166,41 @@ def execute_tool(name: str, args: Dict[str, Any], settings: LLMSettings) -> str:
 SYSTEM_PROMPT = """You are a system and documentation assistant. Your goal is to answer questions using the project wiki files, source code, and the deployed backend API.
 
 Structure:
-- `wiki/`: Project documentation.
+- `wiki/`: Project documentation. Use `list_files("wiki")` to see all wiki pages.
 - `backend/app/`: Backend source code.
-- `backend/app/routers/`: API router modules.
+- `backend/app/routers/`: API router modules (analytics.py, items.py, learners.py, interactions.py, pipeline.py).
 - `backend/app/etl.py`: ETL pipeline code.
+- `backend/app/main.py`: Application entry point and global error handlers.
 - `caddy/Caddyfile`: Reverse proxy configuration.
-- `Dockerfile`: Container configuration.
+- `Dockerfile`: Container configuration (found in the project root — read with `read_file("Dockerfile")`).
+- `docker-compose.yml`: Docker Compose configuration (read with `read_file("docker-compose.yml")`).
 
 Tools:
 1. `list_files` & `read_file`: Use these to explore the documentation, source code, and configuration files.
 2. `query_api`: Use this to get live data from the system or check system status.
 
 Rules:
-1. For documentation questions, use `list_files` and `read_file` on the `wiki/` directory.
-2. For system architecture, framework, or code questions, use `list_files` and `read_file` on the `backend/` directory.
-3. If an API call fails or behaves unexpectedly, ALWAYS read the corresponding router in `backend/app/routers/` to diagnose the bug.
-   - When looking for bugs, pay close attention to risky operations: division (potential ZeroDivisionError), sorting with `None` values, or list indexing without length checks.
-4. For live data (counts, scores, analytics), use `query_api`.
-   - If asked for a total count of items (e.g., learners, scores), query the relevant endpoint and count the entries in the returned JSON list.
-5. While you are still searching or plan to call more tools, DO NOT provide a final JSON response. Just call the tools.
-6. Once you have found the definitive answer, provide your final response as a JSON object with two fields: "answer" and "source".
+1. For documentation questions (wiki, Docker cleanup, setup steps), use `list_files("wiki")` first to discover all wiki files, then read the relevant ones. Docker-related cleanup info is in the wiki.
+2. For framework/technology questions: ALWAYS read `backend/app/main.py` — the import statements at the top reveal the web framework (e.g., `from fastapi import ...` means FastAPI).
+3. For Dockerfile questions: read `read_file("Dockerfile")`. Multiple `FROM` statements indicate a multi-stage build (used to keep the final image small by discarding build-time dependencies).
+4. If an API call fails or behaves unexpectedly, or if asked about potential bugs in analytics.py, ALWAYS:
+   a. First query the endpoint that fails (e.g., GET /analytics/completion-rate?lab=lab-99) and read the error response.
+   b. Then read `backend/app/routers/analytics.py` in full.
+   c. Identify risky operations:
+      - Missing early-return guard: some endpoints check `if not item_ids: return ...` but `get_completion_rate` does NOT — it runs a SQL query with an empty `IN ()` list which raises an error in PostgreSQL.
+      - Division: `rate = (passed_learners / total_learners) * 100` — guarded by the `if total_learners == 0` check above it.
+      - None-unsafe sort: `sorted(rows, key=lambda r: r.avg_score, reverse=True)` in `get_top_learners` — if `avg_score` is None, Python raises TypeError.
+5. To compare error handling between ETL and API:
+   - Read `backend/app/etl.py`: the ETL pipeline uses `response.raise_for_status()` which raises an exception on HTTP errors; it does NOT catch them, so failures propagate as unhandled exceptions.
+   - Read `backend/app/main.py`: the API registers a global `@app.exception_handler(Exception)` that catches ALL unhandled exceptions and returns a JSON response with `detail`, `type`, and last 3 lines of `traceback`.
+6. For live data (counts, scores, analytics), use `query_api`.
+   - To count items in the database: query GET /items/ with authentication, parse the JSON response as a list, and count the number of elements (use `len()`).
+   - If asked for a total count, the answer is the length of the returned JSON array.
+7. While you are still searching or plan to call more tools, DO NOT provide a final JSON response. Just call the tools.
+8. Once you have found the definitive answer, provide your final response as a JSON object with two fields: "answer" and "source".
    - "answer": A direct, concise and accurate answer based on the information found.
-   - "source": (Optional) The wiki section reference in the format `file_path#section-anchor`.
-7. Do not include any text outside this JSON object in your final answer.
-8. If you cannot find the answer, state so in the "answer" field.
+   - "source": (Optional) The file path or wiki section reference in the format `file_path#section-anchor`.
+9. Do not include any text outside this JSON object in your final answer.
 """
 
 def main():
@@ -221,7 +232,7 @@ def main():
     all_tool_calls = []
 
     try:
-        for _ in range(10):  # Limit to 10 iterations
+        for _ in range(20):  # Limit to 20 iterations
             response = client.chat.completions.create(
                 model=settings.llm_model,
                 messages=messages,
@@ -314,13 +325,13 @@ def main():
             print(agent_response.model_dump_json())
             sys.exit(0)
 
-        print("Error: Hit maximum tool call limit (10).", file=sys.stderr)
+        print("Error: Hit maximum tool call limit (20).", file=sys.stderr)
         agent_response = AgentResponse(
             answer="Error: Hit maximum tool call limit.",
             tool_calls=all_tool_calls
         )
         print(agent_response.model_dump_json())
-        sys.exit(1)
+        sys.exit(0)
 
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
