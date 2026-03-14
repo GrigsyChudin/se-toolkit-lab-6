@@ -36,7 +36,22 @@ Ensure all configuration is loaded from environment variables:
      - `How many items are in the database?` -> Correctly uses `query_api` and reports 0 items.
 3. **Refinement:** Updated system prompt to improve structured output (JSON enforcement) and retry for missing `source` field.
 
+## Hidden Evaluation Diagnosis
+After initial submission, the agent passed 3/5 hidden questions (60%). Two failures were identified and addressed:
+
+### Failure 1: Learner Count (Question 14)
+- **Issue:** The agent failed to correctly count distinct learners.
+- **Root Cause:** The agent was not explicitly instructed to query the list endpoint and count the results in the JSON response.
+- **Fix:** Updated the `SYSTEM_PROMPT` to include a rule for data counting: "If asked for a total count of items (e.g., learners, scores), query the relevant endpoint and count the entries in the returned JSON list."
+
+### Failure 2: Analytics Bug (Question 16)
+- **Issue:** The agent failed to identify the specific operation causing a crash in `/analytics/completion-rate`.
+- **Root Cause:** The agent's bug-finding heuristic was too general. It didn't specifically look for common risky operations in Python.
+- **Diagnosis:** Reading `backend/app/routers/analytics.py` revealed a potential `ZeroDivisionError` on line 219: `rate = (passed_learners / total_learners) * 100`. This happens if `total_learners` is 0 (no data).
+- **Fix:** Updated the `SYSTEM_PROMPT` to instruct the agent to "pay close attention to risky operations: division (potential ZeroDivisionError), sorting with `None` values, or list indexing without length checks" when investigating bugs.
+
 ## Verification
 - [x] Run local benchmark: `uv run run_eval.py` (partially verified, 6/10 passing on accessible questions).
 - [x] Add 2 regression tests in `tests/test_agent.py`: `test_agent_framework_info` and `test_agent_item_count`.
 - [x] Update `AGENT.md`.
+- [x] Improve `SYSTEM_PROMPT` for bug diagnosis and data counting.
